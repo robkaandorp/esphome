@@ -55,6 +55,10 @@ void TCPLedStreamComponent::setup() {
     return;
   }
   ESP_LOGI(TAG, "Listening on port %u for LED frames", port_);
+  last_stats_publish_ = millis();
+  if (client_connected_binary_sensor_ != nullptr) {
+    client_connected_binary_sensor_->publish_state(false);
+  }
 }
 
 bool TCPLedStreamComponent::apply_pixels_(const uint8_t *data, uint32_t count) {
@@ -146,8 +150,27 @@ bool TCPLedStreamComponent::read_frame_() {
     }
     got += (size_t) n;
   }
+  // Overlap detection: if a new frame arrives before previous presumed completion window elapsed
+  uint32_t now = millis();
+  // Determine dynamic completion window if estimate mode
+  uint32_t window_ms = frame_completion_interval_ms_;
+  if (completion_mode_ == "estimate") {
+    auto *addr = static_cast<light::AddressableLight *>(light_->get_output());
+    if (addr != nullptr) {
+      // Approximate: number_of_leds * per_led_us / 1000 -> ms, plus small overhead (2ms)
+      uint32_t est = (uint64_t) addr->size() * show_time_per_led_us_ / 1000ULL + 2;
+      window_ms = est > 1 ? est : 1;
+    }
+  }
+  if (frame_in_progress_ && (now - last_frame_time_ < window_ms)) {
+    overlaps_++;
+  }
+  frame_in_progress_ = true;
+  last_frame_time_ = now;
   apply_pixels_(rx_buffer_.data(), count);
-  last_activity_ = millis();
+  frame_count_++;
+  bytes_received_ += (uint32_t) (10 + rx_buffer_.size());
+  last_activity_ = now;
   return true;
 }
 
@@ -162,6 +185,10 @@ void TCPLedStreamComponent::loop() {
       client_->setblocking(false);
       last_activity_ = millis();
       ESP_LOGI(TAG, "Client connected %s", client_->getpeername().c_str());
+      connects_++;
+      if (client_connected_binary_sensor_ != nullptr) {
+        client_connected_binary_sensor_->publish_state(true);
+      }
     }
   }
   if (client_) {
@@ -171,8 +198,55 @@ void TCPLedStreamComponent::loop() {
         ESP_LOGI(TAG, "Connection timeout");
         client_->close();
         client_.reset();
+        disconnects_++;
+        frame_in_progress_ = false;
+        if (client_connected_binary_sensor_ != nullptr) {
+          client_connected_binary_sensor_->publish_state(false);
+        }
       }
     }
+  }
+
+  // Heuristic: mark frame complete when window elapsed
+  uint32_t window_ms2 = frame_completion_interval_ms_;
+  if (completion_mode_ == "estimate") {
+    auto *addr = static_cast<light::AddressableLight *>(light_->get_output());
+    if (addr != nullptr) {
+      uint32_t est = (uint64_t) addr->size() * show_time_per_led_us_ / 1000ULL + 2;
+      window_ms2 = est > 1 ? est : 1;
+    }
+  }
+  if (frame_in_progress_ && (millis() - last_frame_time_ >= window_ms2)) {
+    frame_in_progress_ = false;  // next frame within window will count as overlap
+  }
+
+  publish_stats_();
+}
+
+void TCPLedStreamComponent::publish_stats_() {
+  uint32_t now = millis();
+  if (now - last_stats_publish_ < 1000)  // publish every ~1s
+    return;
+  float seconds = (now - last_stats_publish_) / 1000.0f;
+  last_stats_publish_ = now;
+  if (frame_rate_sensor_ != nullptr) {
+    // compute fps from frames since last publish using diff of frame_count_
+    static uint32_t last_frame_count = 0;
+    uint32_t diff = frame_count_ - last_frame_count;
+    last_frame_count = frame_count_;
+    frame_rate_sensor_->publish_state(diff / seconds);
+  }
+  if (bytes_received_sensor_ != nullptr) {
+    bytes_received_sensor_->publish_state(bytes_received_);
+  }
+  if (connects_sensor_ != nullptr) {
+    connects_sensor_->publish_state(connects_);
+  }
+  if (disconnects_sensor_ != nullptr) {
+    disconnects_sensor_->publish_state(disconnects_);
+  }
+  if (overlaps_sensor_ != nullptr) {
+    overlaps_sensor_->publish_state(overlaps_);
   }
 }
 

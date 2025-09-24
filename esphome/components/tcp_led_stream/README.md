@@ -39,3 +39,47 @@ s.sendall(hdr+pixels)
 ```
 
 Future ideas: optional CRC, chunked streaming, gzip, authentication, multi-client broadcast.
+
+## Diagnostics & Sensors
+
+You can expose runtime statistics as sensors:
+
+```yaml
+tcp_led_stream:
+  id: led_stream
+  light_id: strip
+  port: 7777
+  pixel_format: RGB
+  timeout: 5000
+  frame_completion_interval: 15   # ms window to consider frame rendering "busy"
+  completion_mode: heuristic       # or 'estimate'
+  show_time_per_led_us: 30         # only used in estimate mode (microseconds per LED)
+  frame_rate:
+    name: LED Stream FPS
+  bytes_received:
+    name: LED Stream Bytes
+  connects:
+    name: LED Stream Connects
+  disconnects:
+    name: LED Stream Disconnects
+  overlaps:
+    name: LED Stream Overlaps
+  client_connected:
+    name: LED Stream Client Connected
+```
+
+Sensors:
+- `frame_rate` (fps): Frames applied per second (rolling, published ~1s).
+- `bytes_received` (B): Cumulative bytes received including headers.
+- `connects`: Total successful TCP client connections.
+- `disconnects`: Total disconnects/timeouts.
+- `overlaps`: Count of frames that arrived before the previous frame's completion window elapsed.
+- `client_connected` (binary): True while a TCP client is actively connected.
+
+`frame_completion_interval` (heuristic mode) defines a fixed window (ms) after a frame is received during which a new frame counts as an overlap.
+
+`completion_mode`:
+- `heuristic` (default): Uses the fixed `frame_completion_interval`.
+- `estimate`: Dynamically estimates completion time from LED count * `show_time_per_led_us` + small overhead (2ms). This can better reflect long strips where refresh time scales with length.
+
+`show_time_per_led_us` is the assumed microseconds each LED requires for transfer + latch (e.g. WS2812 ~30 µs/LED including reset overhead averaged). Adjust based on your physical strip and driver method. A too-small value underestimates overlap; a too-large value may over-count overlaps.
