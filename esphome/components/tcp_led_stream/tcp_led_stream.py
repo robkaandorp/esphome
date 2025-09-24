@@ -4,7 +4,9 @@ import esphome.config_validation as cv
 from esphome.const import CONF_ID, CONF_LIGHT_ID, CONF_PORT
 
 DEPENDENCIES = ["network"]
-AUTO_LOAD = ["light"]
+# Ensure required base component headers (light, sensor, binary_sensor) are present even if no entities
+# are explicitly configured besides those created here.
+AUTO_LOAD = ["light", "sensor", "binary_sensor"]
 
 CONF_PIXEL_FORMAT = "pixel_format"
 CONF_TIMEOUT = "timeout"  # ms inactivity before connection dropped
