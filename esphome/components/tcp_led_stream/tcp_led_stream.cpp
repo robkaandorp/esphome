@@ -58,28 +58,50 @@ void TCPLedStreamComponent::setup() {
 }
 
 bool TCPLedStreamComponent::apply_pixels_(const uint8_t *data, uint32_t count) {
-  if (light_ == nullptr) return false;
-  auto *it = light_->get_addressable();
-  if (it == nullptr) return false;
-  uint32_t maxn = std::min(count, (uint32_t) it->size());
+  if (light_ == nullptr)
+    return false;
+  // AddressableLightState doesn't expose a get_addressable() helper; obtain the underlying output
+  auto *addr = static_cast<light::AddressableLight *>(light_->get_output());
+  if (addr == nullptr)
+    return false;
+  uint32_t maxn = std::min(count, (uint32_t) addr->size());
   uint8_t r, g, b, w = 0;
-  bool has_w = (format_ == RGBW || format_ == GRBW);
   for (uint32_t i = 0; i < maxn; i++) {
     switch (format_) {
       case RGB:
-        r = data[i * 3 + 0]; g = data[i * 3 + 1]; b = data[i * 3 + 2]; w = (r + g + b) / 3; break;
+        r = data[i * 3 + 0];
+        g = data[i * 3 + 1];
+        b = data[i * 3 + 2];
+        w = (r + g + b) / 3;
+        break;
       case GRB:
-        g = data[i * 3 + 0]; r = data[i * 3 + 1]; b = data[i * 3 + 2]; w = (r + g + b) / 3; break;
+        g = data[i * 3 + 0];
+        r = data[i * 3 + 1];
+        b = data[i * 3 + 2];
+        w = (r + g + b) / 3;
+        break;
       case BGR:
-        b = data[i * 3 + 0]; g = data[i * 3 + 1]; r = data[i * 3 + 2]; w = (r + g + b) / 3; break;
+        b = data[i * 3 + 0];
+        g = data[i * 3 + 1];
+        r = data[i * 3 + 2];
+        w = (r + g + b) / 3;
+        break;
       case RGBW:
-        r = data[i * 4 + 0]; g = data[i * 4 + 1]; b = data[i * 4 + 2]; w = data[i * 4 + 3]; break;
+        r = data[i * 4 + 0];
+        g = data[i * 4 + 1];
+        b = data[i * 4 + 2];
+        w = data[i * 4 + 3];
+        break;
       case GRBW:
-        g = data[i * 4 + 0]; r = data[i * 4 + 1]; b = data[i * 4 + 2]; w = data[i * 4 + 3]; break;
+        g = data[i * 4 + 0];
+        r = data[i * 4 + 1];
+        b = data[i * 4 + 2];
+        w = data[i * 4 + 3];
+        break;
     }
-    (*it)[i].set(Color(r, g, b, w));
+    (*addr)[i].set(Color(r, g, b, w));
   }
-  it->schedule_show();
+  addr->schedule_show();
   return true;
 }
 
@@ -87,7 +109,8 @@ bool TCPLedStreamComponent::read_frame_() {
   // attempt to read header (10 bytes)
   uint8_t header[10];
   ssize_t r = client_->read(header, sizeof(header));
-  if (r == -1) return false;  // no data yet
+  if (r == -1)
+    return false;  // no data yet
   if (r != sizeof(header)) {
     ESP_LOGW(TAG, "Short header %d closing", (int) r);
     return false;  // drop connection
@@ -131,7 +154,8 @@ bool TCPLedStreamComponent::read_frame_() {
 void TCPLedStreamComponent::loop() {
   // Accept new client if none
   if (!client_ && server_ && server_->ready()) {
-    struct sockaddr_storage src; socklen_t sl = sizeof(src);
+    struct sockaddr_storage src;
+    socklen_t sl = sizeof(src);
     auto sock = server_->accept_loop_monitored((struct sockaddr *) &src, &sl);
     if (sock) {
       client_ = std::move(sock);
