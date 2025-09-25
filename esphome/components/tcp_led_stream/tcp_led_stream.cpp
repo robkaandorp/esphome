@@ -2,6 +2,7 @@
 #ifdef USE_NETWORK
 #include "esphome/core/log.h"
 #include "esphome/core/hal.h"
+#include "esphome/core/application.h"
 
 namespace esphome {
 namespace tcp_led_stream {
@@ -17,61 +18,60 @@ static const char *const TAG = "tcp_led_stream";
 // Connection sends full frame each time.
 
 void TCPLedStreamComponent::setup() {
-  if (light_ == nullptr) {
+  if (this->light_ == nullptr) {
     ESP_LOGE(TAG, "No light configured");
     this->mark_failed();
     return;
   }
-  server_ = socket::socket_ip_loop_monitored(SOCK_STREAM, 0);
-  if (!server_) {
+  this->server_ = socket::socket_ip_loop_monitored(SOCK_STREAM, 0);
+  if (!this->server_) {
     ESP_LOGE(TAG, "Failed to create server socket");
     this->mark_failed();
     return;
   }
   int enable = 1;
-  if (server_->setsockopt(SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable)) != 0) {
+  if (this->server_->setsockopt(SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable)) != 0) {
     ESP_LOGW(TAG, "setsockopt reuseaddr failed errno=%d", errno);
   }
-  if (server_->setblocking(false) != 0) {
+  if (this->server_->setblocking(false) != 0) {
     ESP_LOGE(TAG, "Failed to set nonblocking");
     this->mark_failed();
     return;
   }
   struct sockaddr_storage addr;
-  socklen_t sl = socket::set_sockaddr_any((struct sockaddr *) &addr, sizeof(addr), port_);
+  socklen_t sl = socket::set_sockaddr_any((struct sockaddr *) &addr, sizeof(addr), this->port_);
   if (sl == 0) {
     ESP_LOGE(TAG, "Failed to set sockaddr errno=%d", errno);
     this->mark_failed();
     return;
   }
-  if (server_->bind((struct sockaddr *) &addr, sl) != 0) {
+  if (this->server_->bind((struct sockaddr *) &addr, sl) != 0) {
     ESP_LOGE(TAG, "Bind failed errno=%d", errno);
     this->mark_failed();
     return;
   }
-  if (server_->listen(1) != 0) {
+  if (this->server_->listen(1) != 0) {
     ESP_LOGE(TAG, "Listen failed errno=%d", errno);
     this->mark_failed();
     return;
   }
-  ESP_LOGI(TAG, "Listening on port %u for LED frames", port_);
-  last_stats_publish_ = millis();
-  if (client_connected_binary_sensor_ != nullptr) {
-    client_connected_binary_sensor_->publish_state(false);
+  ESP_LOGI(TAG, "Listening on port %u for LED frames", this->port_);
+  this->last_stats_publish_ = App.get_loop_component_start_time();
+  if (this->client_connected_binary_sensor_ != nullptr) {
+    this->client_connected_binary_sensor_->publish_state(false);
   }
 }
 
 bool TCPLedStreamComponent::apply_pixels_(const uint8_t *data, uint32_t count) {
-  if (light_ == nullptr)
+  if (this->light_ == nullptr)
     return false;
-  // AddressableLightState doesn't expose a get_addressable() helper; obtain the underlying output
-  auto *addr = static_cast<light::AddressableLight *>(light_->get_output());
+  auto *addr = static_cast<light::AddressableLight *>(this->light_->get_output());
   if (addr == nullptr)
     return false;
   uint32_t maxn = std::min(count, (uint32_t) addr->size());
   uint8_t r, g, b, w = 0;
   for (uint32_t i = 0; i < maxn; i++) {
-    switch (format_) {
+    switch (this->format_) {
       case RGB:
         r = data[i * 3 + 0];
         g = data[i * 3 + 1];
@@ -110,14 +110,15 @@ bool TCPLedStreamComponent::apply_pixels_(const uint8_t *data, uint32_t count) {
 }
 
 bool TCPLedStreamComponent::read_frame_() {
-  // attempt to read header (10 bytes)
+  // State machine static data (kept as members if expanded later)
   uint8_t header[10];
-  ssize_t r = client_->read(header, sizeof(header));
-  if (r == -1)
-    return false;  // no data yet
+  ssize_t r = this->client_->read(header, sizeof(header));
+  if (r == -1) {
+    return false;  // nothing this loop
+  }
   if (r != sizeof(header)) {
-    ESP_LOGW(TAG, "Short header %d closing", (int) r);
-    return false;  // drop connection
+    ESP_LOGW(TAG, "Short/partial header (%d) - closing", (int) r);
+    return false;
   }
   if (memcmp(header, "LEDS", 4) != 0) {
     ESP_LOGW(TAG, "Bad magic");
@@ -129,20 +130,19 @@ bool TCPLedStreamComponent::read_frame_() {
   }
   uint32_t count = (header[5] << 24) | (header[6] << 16) | (header[7] << 8) | header[8];
   PixelFormat frame_fmt = (PixelFormat) header[9];
-  if (count == 0 || count > 5000) {  // safety limit
+  if (count == 0 || count > 5000) {
     ESP_LOGW(TAG, "Invalid pixel count %u", (unsigned) count);
     return false;
   }
-  size_t bpp = (frame_fmt == RGBW || frame_fmt == GRBW) ? 4 : 3;  // treat others as 3
+  size_t bpp = (frame_fmt == RGBW || frame_fmt == GRBW) ? 4 : 3;
   size_t need = count * bpp;
-  rx_buffer_.resize(need);
+  this->rx_buffer_.resize(need);
   size_t got = 0;
   while (got < need) {
-    ssize_t n = client_->read(rx_buffer_.data() + got, need - got);
+    ssize_t n = this->client_->read(this->rx_buffer_.data() + got, need - got);
     if (n == -1) {
-      // wait for more (nonblocking) - but avoid busy loop
-      delay(0);
-      continue;
+      // exit early, will continue next loop iteration (non-blocking)
+      break;
     }
     if (n == 0) {
       ESP_LOGW(TAG, "Client closed during frame");
@@ -150,104 +150,114 @@ bool TCPLedStreamComponent::read_frame_() {
     }
     got += (size_t) n;
   }
+  if (got < need) {
+    // Incomplete frame this iteration – treat as not ready yet.
+    return true;  // keep connection, but don't process
+  }
   // Overlap detection: if a new frame arrives before previous presumed completion window elapsed
-  uint32_t now = millis();
+  uint32_t now = App.get_loop_component_start_time();
   // Determine dynamic completion window if estimate mode
-  uint32_t window_ms = frame_completion_interval_ms_;
-  if (completion_mode_ == "estimate") {
-    auto *addr = static_cast<light::AddressableLight *>(light_->get_output());
+  uint32_t window_ms = this->frame_completion_interval_ms_;
+  if (this->completion_mode_ == "estimate") {
+    auto *addr = static_cast<light::AddressableLight *>(this->light_->get_output());
     if (addr != nullptr) {
-      // Approximate: number_of_leds * per_led_us / 1000 -> ms, plus small overhead (2ms)
-      uint32_t est = (uint64_t) addr->size() * show_time_per_led_us_ / 1000ULL + 2;
+      uint32_t est = (uint64_t) addr->size() * this->show_time_per_led_us_ / 1000ULL + 2;
       window_ms = est > 1 ? est : 1;
     }
   }
-  if (frame_in_progress_ && (now - last_frame_time_ < window_ms)) {
-    overlaps_++;
+  if (this->frame_in_progress_ && (now - this->last_frame_time_ < window_ms)) {
+    this->overlaps_++;
   }
-  frame_in_progress_ = true;
-  last_frame_time_ = now;
-  apply_pixels_(rx_buffer_.data(), count);
-  frame_count_++;
-  bytes_received_ += (uint32_t) (10 + rx_buffer_.size());
-  last_activity_ = now;
+  this->frame_in_progress_ = true;
+  this->last_frame_time_ = now;
+  this->apply_pixels_(this->rx_buffer_.data(), count);
+  this->frame_count_++;
+  this->bytes_received_ += (uint32_t) (10 + this->rx_buffer_.size());
+  this->last_activity_ = now;
   return true;
 }
 
 void TCPLedStreamComponent::loop() {
   // Accept new client if none
-  if (!client_ && server_ && server_->ready()) {
+  if (!this->client_ && this->server_ && this->server_->ready()) {
     struct sockaddr_storage src;
     socklen_t sl = sizeof(src);
-    auto sock = server_->accept_loop_monitored((struct sockaddr *) &src, &sl);
+    auto sock = this->server_->accept_loop_monitored((struct sockaddr *) &src, &sl);
     if (sock) {
-      client_ = std::move(sock);
-      client_->setblocking(false);
-      last_activity_ = millis();
-      ESP_LOGI(TAG, "Client connected %s", client_->getpeername().c_str());
-      connects_++;
-      if (client_connected_binary_sensor_ != nullptr) {
-        client_connected_binary_sensor_->publish_state(true);
+      this->client_ = std::move(sock);
+      this->client_->setblocking(false);
+      this->last_activity_ = App.get_loop_component_start_time();
+      ESP_LOGI(TAG, "Client connected %s", this->client_->getpeername().c_str());
+      this->connects_++;
+      if (this->client_connected_binary_sensor_ != nullptr) {
+        this->client_connected_binary_sensor_->publish_state(true);
       }
     }
   }
-  if (client_) {
-    if (!read_frame_()) {
-      // either no data yet or error; check timeout
-      if (timeout_ms_ && (millis() - last_activity_ > timeout_ms_)) {
+  if (this->client_) {
+    if (!this->read_frame_()) {
+      if (this->timeout_ms_ && (App.get_loop_component_start_time() - this->last_activity_ > this->timeout_ms_)) {
         ESP_LOGI(TAG, "Connection timeout");
-        client_->close();
-        client_.reset();
-        disconnects_++;
-        frame_in_progress_ = false;
-        if (client_connected_binary_sensor_ != nullptr) {
-          client_connected_binary_sensor_->publish_state(false);
+        this->client_->close();
+        this->client_.reset();
+        this->disconnects_++;
+        this->frame_in_progress_ = false;
+        if (this->client_connected_binary_sensor_ != nullptr) {
+          this->client_connected_binary_sensor_->publish_state(false);
         }
       }
     }
   }
 
   // Heuristic: mark frame complete when window elapsed
-  uint32_t window_ms2 = frame_completion_interval_ms_;
-  if (completion_mode_ == "estimate") {
-    auto *addr = static_cast<light::AddressableLight *>(light_->get_output());
+  uint32_t window_ms2 = this->frame_completion_interval_ms_;
+  if (this->completion_mode_ == "estimate") {
+    auto *addr = static_cast<light::AddressableLight *>(this->light_->get_output());
     if (addr != nullptr) {
-      uint32_t est = (uint64_t) addr->size() * show_time_per_led_us_ / 1000ULL + 2;
+      uint32_t est = (uint64_t) addr->size() * this->show_time_per_led_us_ / 1000ULL + 2;
       window_ms2 = est > 1 ? est : 1;
     }
   }
-  if (frame_in_progress_ && (millis() - last_frame_time_ >= window_ms2)) {
-    frame_in_progress_ = false;  // next frame within window will count as overlap
+  if (this->frame_in_progress_ && (App.get_loop_component_start_time() - this->last_frame_time_ >= window_ms2)) {
+    this->frame_in_progress_ = false;
   }
 
-  publish_stats_();
+  this->publish_stats_();
 }
 
 void TCPLedStreamComponent::publish_stats_() {
-  uint32_t now = millis();
-  if (now - last_stats_publish_ < 1000)  // publish every ~1s
+  uint32_t now = App.get_loop_component_start_time();
+  if (now - this->last_stats_publish_ < 1000)
     return;
-  float seconds = (now - last_stats_publish_) / 1000.0f;
-  last_stats_publish_ = now;
-  if (frame_rate_sensor_ != nullptr) {
-    // compute fps from frames since last publish using diff of frame_count_
-    static uint32_t last_frame_count = 0;
-    uint32_t diff = frame_count_ - last_frame_count;
-    last_frame_count = frame_count_;
-    frame_rate_sensor_->publish_state(diff / seconds);
+  float seconds = (now - this->last_stats_publish_) / 1000.0f;
+  this->last_stats_publish_ = now;
+  static uint32_t last_frame_count = 0;  // acceptable static for diff calculation
+  if (this->frame_rate_sensor_ != nullptr) {
+    uint32_t diff = this->frame_count_ - last_frame_count;
+    this->frame_rate_sensor_->publish_state(diff / seconds);
   }
-  if (bytes_received_sensor_ != nullptr) {
-    bytes_received_sensor_->publish_state(bytes_received_);
+  last_frame_count = this->frame_count_;
+  if (this->bytes_received_sensor_ != nullptr) {
+    this->bytes_received_sensor_->publish_state(this->bytes_received_);
   }
-  if (connects_sensor_ != nullptr) {
-    connects_sensor_->publish_state(connects_);
+  if (this->connects_sensor_ != nullptr) {
+    this->connects_sensor_->publish_state(this->connects_);
   }
-  if (disconnects_sensor_ != nullptr) {
-    disconnects_sensor_->publish_state(disconnects_);
+  if (this->disconnects_sensor_ != nullptr) {
+    this->disconnects_sensor_->publish_state(this->disconnects_);
   }
-  if (overlaps_sensor_ != nullptr) {
-    overlaps_sensor_->publish_state(overlaps_);
+  if (this->overlaps_sensor_ != nullptr) {
+    this->overlaps_sensor_->publish_state(this->overlaps_);
   }
+}
+
+void TCPLedStreamComponent::dump_config() {
+  ESP_LOGCONFIG(TAG, "TCP LED Stream:");
+  ESP_LOGCONFIG(TAG, "  Port: %u", this->port_);
+  ESP_LOGCONFIG(TAG, "  Timeout (ms): %u", this->timeout_ms_);
+  ESP_LOGCONFIG(TAG, "  Completion mode: %s", this->completion_mode_.c_str());
+  ESP_LOGCONFIG(TAG, "  Frame completion interval (ms): %u", this->frame_completion_interval_ms_);
+  ESP_LOGCONFIG(TAG, "  Show time per LED (us): %u", this->show_time_per_led_us_);
 }
 
 }  // namespace tcp_led_stream

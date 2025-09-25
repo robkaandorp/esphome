@@ -14,25 +14,26 @@ enum PixelFormat { RGB = 0, RGBW = 1, GRB = 2, GRBW = 3, BGR = 4 };
 
 class TCPLedStreamComponent : public Component {
  public:
-  void set_light(light::AddressableLightState *light) { light_ = light; }
-  void set_port(uint16_t port) { port_ = port; }
-  void set_pixel_format(PixelFormat fmt) { format_ = fmt; }
-  void set_timeout(uint32_t timeout) { timeout_ms_ = timeout; }
-  void set_frame_completion_interval(uint32_t ms) { frame_completion_interval_ms_ = ms; }
+  void set_light(light::AddressableLightState *light) { this->light_ = light; }
+  void set_port(uint16_t port) { this->port_ = port; }
+  void set_pixel_format(PixelFormat fmt) { this->format_ = fmt; }
+  void set_timeout(uint32_t timeout) { this->timeout_ms_ = timeout; }
+  void set_frame_completion_interval(uint32_t ms) { this->frame_completion_interval_ms_ = ms; }
 
   // Sensor setters
-  void set_frame_rate_sensor(sensor::Sensor *s) { frame_rate_sensor_ = s; }
-  void set_bytes_received_sensor(sensor::Sensor *s) { bytes_received_sensor_ = s; }
-  void set_connects_sensor(sensor::Sensor *s) { connects_sensor_ = s; }
-  void set_disconnects_sensor(sensor::Sensor *s) { disconnects_sensor_ = s; }
-  void set_overlaps_sensor(sensor::Sensor *s) { overlaps_sensor_ = s; }
-  void set_client_connected_binary_sensor(binary_sensor::BinarySensor *b) { client_connected_binary_sensor_ = b; }
-  void set_completion_mode(const std::string &m) { completion_mode_ = m; }
-  void set_show_time_per_led_us(uint32_t v) { show_time_per_led_us_ = v; }
+  void set_frame_rate_sensor(sensor::Sensor *s) { this->frame_rate_sensor_ = s; }
+  void set_bytes_received_sensor(sensor::Sensor *s) { this->bytes_received_sensor_ = s; }
+  void set_connects_sensor(sensor::Sensor *s) { this->connects_sensor_ = s; }
+  void set_disconnects_sensor(sensor::Sensor *s) { this->disconnects_sensor_ = s; }
+  void set_overlaps_sensor(sensor::Sensor *s) { this->overlaps_sensor_ = s; }
+  void set_client_connected_binary_sensor(binary_sensor::BinarySensor *b) { this->client_connected_binary_sensor_ = b; }
+  void set_completion_mode(const std::string &m) { this->completion_mode_ = m; }
+  void set_show_time_per_led_us(uint32_t v) { this->show_time_per_led_us_ = v; }
 
   float get_setup_priority() const override { return setup_priority::AFTER_WIFI; }
   void setup() override;
   void loop() override;
+  void dump_config() override;
 
  protected:
   bool read_frame_();
