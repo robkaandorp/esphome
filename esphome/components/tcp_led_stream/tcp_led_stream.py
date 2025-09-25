@@ -1,7 +1,15 @@
 import esphome.codegen as cg
-from esphome.components import binary_sensor, light, sensor
+from esphome.components import light, sensor
 import esphome.config_validation as cv
 from esphome.const import CONF_ID, CONF_LIGHT_ID, CONF_PORT
+
+# Conditionally import binary_sensor to avoid forcing dependency
+try:
+    from esphome.components import binary_sensor
+
+    HAS_BINARY_SENSOR = True
+except ImportError:
+    HAS_BINARY_SENSOR = False
 
 DEPENDENCIES = ["network"]
 # Do not auto-load sensor/binary_sensor per ESPHome contribution guidelines; they are optional.
@@ -70,7 +78,6 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_OVERLAPS): sensor.sensor_schema(
             unit_of_measurement="", accuracy_decimals=0
         ),
-        cv.Optional(CONF_CLIENT_CONNECTED): binary_sensor.binary_sensor_schema(),
         cv.Optional(CONF_COMPLETION_MODE, default="heuristic"): cv.one_of(
             *COMPLETION_MODES, lower=True
         ),
@@ -79,6 +86,12 @@ CONFIG_SCHEMA = cv.Schema(
         ),
     }
 ).extend(cv.COMPONENT_SCHEMA)
+
+# Add binary_sensor schema only if available
+if HAS_BINARY_SENSOR:
+    CONFIG_SCHEMA = CONFIG_SCHEMA.extend(
+        {cv.Optional(CONF_CLIENT_CONNECTED): binary_sensor.binary_sensor_schema()}
+    )
 
 
 async def to_code(config):
@@ -108,6 +121,6 @@ async def to_code(config):
     if CONF_OVERLAPS in config:
         sens = await sensor.new_sensor(config[CONF_OVERLAPS])
         cg.add(var.set_overlaps_sensor(sens))
-    if CONF_CLIENT_CONNECTED in config:
+    if CONF_CLIENT_CONNECTED in config and HAS_BINARY_SENSOR:
         bs = await binary_sensor.new_binary_sensor(config[CONF_CLIENT_CONNECTED])
         cg.add(var.set_client_connected_binary_sensor(bs))
