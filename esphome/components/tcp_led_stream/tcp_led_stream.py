@@ -1,17 +1,26 @@
 import esphome.codegen as cg
-from esphome.components import light, sensor
+from esphome.components import light
 import esphome.config_validation as cv
 from esphome.const import CONF_ID, CONF_LIGHT_ID, CONF_PORT
 
-# Conditionally import binary_sensor to avoid forcing dependency
+# Conditionally import sensor and binary_sensor to avoid forcing dependency
+HAS_SENSOR = False
+try:
+    from esphome.components import sensor
+
+    HAS_SENSOR = True
+except ImportError:
+    sensor = None
+
+HAS_BINARY_SENSOR = False
 try:
     from esphome.components import binary_sensor
 
     HAS_BINARY_SENSOR = True
 except ImportError:
-    HAS_BINARY_SENSOR = False
+    binary_sensor = None
 
-DEPENDENCIES = ["network"]
+DEPENDENCIES = ["network", "socket"]
 # Do not auto-load sensor/binary_sensor per ESPHome contribution guidelines; they are optional.
 AUTO_LOAD = ["light"]
 
@@ -63,21 +72,6 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_FRAME_COMPLETION_INTERVAL, default=15): cv.int_range(
             min=1, max=100
         ),
-        cv.Optional(CONF_FRAME_RATE): sensor.sensor_schema(
-            unit_of_measurement="fps", accuracy_decimals=2
-        ),
-        cv.Optional(CONF_BYTES_RECEIVED): sensor.sensor_schema(
-            unit_of_measurement="B", accuracy_decimals=0
-        ),
-        cv.Optional(CONF_CONNECTS): sensor.sensor_schema(
-            unit_of_measurement="", accuracy_decimals=0
-        ),
-        cv.Optional(CONF_DISCONNECTS): sensor.sensor_schema(
-            unit_of_measurement="", accuracy_decimals=0
-        ),
-        cv.Optional(CONF_OVERLAPS): sensor.sensor_schema(
-            unit_of_measurement="", accuracy_decimals=0
-        ),
         cv.Optional(CONF_COMPLETION_MODE, default="heuristic"): cv.one_of(
             *COMPLETION_MODES, lower=True
         ),
@@ -86,6 +80,28 @@ CONFIG_SCHEMA = cv.Schema(
         ),
     }
 ).extend(cv.COMPONENT_SCHEMA)
+
+# Add sensor schemas only if sensor module is available
+if HAS_SENSOR:
+    CONFIG_SCHEMA = CONFIG_SCHEMA.extend(
+        {
+            cv.Optional(CONF_FRAME_RATE): sensor.sensor_schema(
+                unit_of_measurement="fps", accuracy_decimals=2
+            ),
+            cv.Optional(CONF_BYTES_RECEIVED): sensor.sensor_schema(
+                unit_of_measurement="B", accuracy_decimals=0
+            ),
+            cv.Optional(CONF_CONNECTS): sensor.sensor_schema(
+                unit_of_measurement="", accuracy_decimals=0
+            ),
+            cv.Optional(CONF_DISCONNECTS): sensor.sensor_schema(
+                unit_of_measurement="", accuracy_decimals=0
+            ),
+            cv.Optional(CONF_OVERLAPS): sensor.sensor_schema(
+                unit_of_measurement="", accuracy_decimals=0
+            ),
+        }
+    )
 
 # Add binary_sensor schema only if available
 if HAS_BINARY_SENSOR:
@@ -106,21 +122,22 @@ async def to_code(config):
     cg.add(var.set_completion_mode(config[CONF_COMPLETION_MODE]))
     cg.add(var.set_show_time_per_led_us(config[CONF_SHOW_TIME_PER_LED_US]))
 
-    if CONF_FRAME_RATE in config:
-        sens = await sensor.new_sensor(config[CONF_FRAME_RATE])
-        cg.add(var.set_frame_rate_sensor(sens))
-    if CONF_BYTES_RECEIVED in config:
-        sens = await sensor.new_sensor(config[CONF_BYTES_RECEIVED])
-        cg.add(var.set_bytes_received_sensor(sens))
-    if CONF_CONNECTS in config:
-        sens = await sensor.new_sensor(config[CONF_CONNECTS])
-        cg.add(var.set_connects_sensor(sens))
-    if CONF_DISCONNECTS in config:
-        sens = await sensor.new_sensor(config[CONF_DISCONNECTS])
-        cg.add(var.set_disconnects_sensor(sens))
-    if CONF_OVERLAPS in config:
-        sens = await sensor.new_sensor(config[CONF_OVERLAPS])
-        cg.add(var.set_overlaps_sensor(sens))
+    if HAS_SENSOR:
+        if CONF_FRAME_RATE in config:
+            sens = await sensor.new_sensor(config[CONF_FRAME_RATE])
+            cg.add(var.set_frame_rate_sensor(sens))
+        if CONF_BYTES_RECEIVED in config:
+            sens = await sensor.new_sensor(config[CONF_BYTES_RECEIVED])
+            cg.add(var.set_bytes_received_sensor(sens))
+        if CONF_CONNECTS in config:
+            sens = await sensor.new_sensor(config[CONF_CONNECTS])
+            cg.add(var.set_connects_sensor(sens))
+        if CONF_DISCONNECTS in config:
+            sens = await sensor.new_sensor(config[CONF_DISCONNECTS])
+            cg.add(var.set_disconnects_sensor(sens))
+        if CONF_OVERLAPS in config:
+            sens = await sensor.new_sensor(config[CONF_OVERLAPS])
+            cg.add(var.set_overlaps_sensor(sens))
     if CONF_CLIENT_CONNECTED in config and HAS_BINARY_SENSOR:
         bs = await binary_sensor.new_binary_sensor(config[CONF_CLIENT_CONNECTED])
         cg.add(var.set_client_connected_binary_sensor(bs))

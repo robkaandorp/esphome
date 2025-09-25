@@ -4,7 +4,9 @@
 #include "esphome/core/component.h"
 #include "esphome/components/socket/socket.h"
 #include "esphome/components/light/addressable_light.h"
+#ifdef USE_SENSOR
 #include "esphome/components/sensor/sensor.h"
+#endif
 #ifdef USE_BINARY_SENSOR
 #include "esphome/components/binary_sensor/binary_sensor.h"
 #endif
@@ -23,11 +25,19 @@ class TCPLedStreamComponent : public Component {
   void set_frame_completion_interval(uint32_t ms) { this->frame_completion_interval_ms_ = ms; }
 
   // Sensor setters
+#ifdef USE_SENSOR
   void set_frame_rate_sensor(sensor::Sensor *s) { this->frame_rate_sensor_ = s; }
   void set_bytes_received_sensor(sensor::Sensor *s) { this->bytes_received_sensor_ = s; }
   void set_connects_sensor(sensor::Sensor *s) { this->connects_sensor_ = s; }
   void set_disconnects_sensor(sensor::Sensor *s) { this->disconnects_sensor_ = s; }
   void set_overlaps_sensor(sensor::Sensor *s) { this->overlaps_sensor_ = s; }
+#else
+  void set_frame_rate_sensor(void *s) {}
+  void set_bytes_received_sensor(void *s) {}
+  void set_connects_sensor(void *s) {}
+  void set_disconnects_sensor(void *s) {}
+  void set_overlaps_sensor(void *s) {}
+#endif
   void set_client_connected_binary_sensor(
 #ifdef USE_BINARY_SENSOR
       binary_sensor::BinarySensor *b
@@ -76,11 +86,13 @@ class TCPLedStreamComponent : public Component {
   uint32_t show_time_per_led_us_{30};  // microseconds per LED (estimate mode)
 
   // Sensors
+#ifdef USE_SENSOR
   sensor::Sensor *frame_rate_sensor_{nullptr};
   sensor::Sensor *bytes_received_sensor_{nullptr};
   sensor::Sensor *connects_sensor_{nullptr};
   sensor::Sensor *disconnects_sensor_{nullptr};
   sensor::Sensor *overlaps_sensor_{nullptr};
+#endif
 #ifdef USE_BINARY_SENSOR
   binary_sensor::BinarySensor *client_connected_binary_sensor_{nullptr};
 #endif

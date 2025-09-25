@@ -237,6 +237,7 @@ void TCPLedStreamComponent::publish_stats_() {
     return;
   float seconds = (now - this->last_stats_publish_) / 1000.0f;
   this->last_stats_publish_ = now;
+#ifdef USE_SENSOR
   static uint32_t last_frame_count = 0;  // acceptable static for diff calculation
   if (this->frame_rate_sensor_ != nullptr) {
     uint32_t diff = this->frame_count_ - last_frame_count;
@@ -255,6 +256,7 @@ void TCPLedStreamComponent::publish_stats_() {
   if (this->overlaps_sensor_ != nullptr) {
     this->overlaps_sensor_->publish_state(this->overlaps_);
   }
+#endif
 }
 
 void TCPLedStreamComponent::dump_config() {
