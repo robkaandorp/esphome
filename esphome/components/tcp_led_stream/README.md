@@ -13,6 +13,11 @@ Bytes per pixel: 3 for RGB/GRB/BGR, 4 for RGBW/GRBW.
 
 Example YAML:
 ```yaml
+# Required component declarations for tcp_led_stream
+socket:         # Required for TCP networking
+sensor:         # Required if using any sensor entities (frame_rate, bytes_received, etc.)
+binary_sensor:  # Required if using client_connected binary sensor
+
 light:
   - platform: neopixelbus
     id: strip
@@ -42,9 +47,20 @@ Future ideas: optional CRC, chunked streaming, gzip, authentication, multi-clien
 
 ## Diagnostics & Sensors
 
+**Important**: When using any sensor entities, you must explicitly declare the required component dependencies in your YAML configuration. ESPHome requires these declarations even when components are used indirectly by other components:
+
+- `socket`: Always required for TCP networking functionality
+- `sensor`: Required only if using sensor entities (`frame_rate`, `bytes_received`, `connects`, `disconnects`, `overlaps`)
+- `binary_sensor`: Required only if using the `client_connected` binary sensor entity
+
 You can expose runtime statistics as sensors:
 
 ```yaml
+# Required component declarations
+socket:         # Required for TCP networking
+sensor:         # Required for sensor entities
+binary_sensor:  # Required for binary sensor entities
+
 tcp_led_stream:
   id: led_stream
   light_id: strip
