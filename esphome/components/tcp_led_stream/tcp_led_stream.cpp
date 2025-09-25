@@ -112,71 +112,119 @@ bool TCPLedStreamComponent::apply_pixels_(const uint8_t *data, uint32_t count) {
 }
 
 bool TCPLedStreamComponent::read_frame_() {
-  // State machine static data (kept as members if expanded later)
-  uint8_t header[10];
-  ssize_t r = this->client_->read(header, sizeof(header));
-  if (r == -1) {
-    return false;  // nothing this loop
-  }
-  if (r != sizeof(header)) {
-    ESP_LOGW(TAG, "Short/partial header (%d) - closing", (int) r);
-    return false;
-  }
-  if (memcmp(header, "LEDS", 4) != 0) {
-    ESP_LOGW(TAG, "Bad magic");
-    return false;
-  }
-  if (header[4] != 0x01) {
-    ESP_LOGW(TAG, "Unsupported version %u", header[4]);
-    return false;
-  }
-  uint32_t count = (header[5] << 24) | (header[6] << 16) | (header[7] << 8) | header[8];
-  PixelFormat frame_fmt = (PixelFormat) header[9];
-  if (count == 0 || count > 5000) {
-    ESP_LOGW(TAG, "Invalid pixel count %u", (unsigned) count);
-    return false;
-  }
-  size_t bpp = (frame_fmt == RGBW || frame_fmt == GRBW) ? 4 : 3;
-  size_t need = count * bpp;
-  this->rx_buffer_.resize(need);
-  size_t got = 0;
-  while (got < need) {
-    ssize_t n = this->client_->read(this->rx_buffer_.data() + got, need - got);
-    if (n == -1) {
-      // exit early, will continue next loop iteration (non-blocking)
-      break;
+  while (true) {
+    if (this->receive_state_ == WAITING_HEADER) {
+      // Try to read more header bytes
+      size_t remaining = sizeof(this->header_buffer_) - this->header_bytes_received_;
+      ssize_t r = this->client_->read(this->header_buffer_ + this->header_bytes_received_, remaining);
+
+      if (r == -1) {
+        return true;  // No data available, try again next loop
+      }
+      if (r == 0) {
+        ESP_LOGW(TAG, "Client closed connection during header");
+        return false;
+      }
+
+      this->header_bytes_received_ += r;
+
+      // Check if we have complete header
+      if (this->header_bytes_received_ < sizeof(this->header_buffer_)) {
+        return true;  // Still waiting for complete header
+      }
+
+      // Validate header
+      if (memcmp(this->header_buffer_, "LEDS", 4) != 0) {
+        ESP_LOGW(TAG, "Bad magic: got %02X %02X %02X %02X, expected 'LEDS'", this->header_buffer_[0],
+                 this->header_buffer_[1], this->header_buffer_[2], this->header_buffer_[3]);
+        this->reset_receive_state_();
+        return false;
+      }
+
+      if (this->header_buffer_[4] != 0x01) {
+        ESP_LOGW(TAG, "Unsupported protocol version %u", this->header_buffer_[4]);
+        this->reset_receive_state_();
+        return false;
+      }
+
+      uint32_t count = (this->header_buffer_[5] << 24) | (this->header_buffer_[6] << 16) |
+                       (this->header_buffer_[7] << 8) | this->header_buffer_[8];
+      PixelFormat frame_fmt = (PixelFormat) this->header_buffer_[9];
+
+      if (count == 0 || count > 5000) {
+        ESP_LOGW(TAG, "Invalid pixel count %u", (unsigned) count);
+        this->reset_receive_state_();
+        return false;
+      }
+
+      // Calculate expected payload size
+      size_t bpp = (frame_fmt == RGBW || frame_fmt == GRBW) ? 4 : 3;
+      this->expected_payload_size_ = count * bpp;
+      this->payload_bytes_received_ = 0;
+      this->rx_buffer_.resize(this->expected_payload_size_);
+
+      // Store frame format for processing
+      this->format_ = frame_fmt;
+
+      // Transition to payload reading
+      this->receive_state_ = WAITING_PAYLOAD;
+      this->last_activity_ = App.get_loop_component_start_time();
+
+      // Continue to payload reading in same loop iteration
+      continue;
     }
-    if (n == 0) {
-      ESP_LOGW(TAG, "Client closed during frame");
-      return false;
+
+    if (this->receive_state_ == WAITING_PAYLOAD) {
+      // Try to read more payload bytes
+      size_t remaining = this->expected_payload_size_ - this->payload_bytes_received_;
+      ssize_t r = this->client_->read(this->rx_buffer_.data() + this->payload_bytes_received_, remaining);
+
+      if (r == -1) {
+        return true;  // No data available, try again next loop
+      }
+      if (r == 0) {
+        ESP_LOGW(TAG, "Client closed connection during payload");
+        this->reset_receive_state_();
+        return false;
+      }
+
+      this->payload_bytes_received_ += r;
+
+      // Check if we have complete payload
+      if (this->payload_bytes_received_ < this->expected_payload_size_) {
+        return true;  // Still waiting for complete payload
+      }
+
+      // Process complete frame
+      uint32_t count = (this->header_buffer_[5] << 24) | (this->header_buffer_[6] << 16) |
+                       (this->header_buffer_[7] << 8) | this->header_buffer_[8];
+
+      // Overlap detection
+      uint32_t now = App.get_loop_component_start_time();
+      uint32_t window_ms = this->frame_completion_interval_ms_;
+      if (this->completion_mode_ == "estimate") {
+        auto *addr = static_cast<light::AddressableLight *>(this->light_->get_output());
+        if (addr != nullptr) {
+          uint32_t est = (uint64_t) addr->size() * this->show_time_per_led_us_ / 1000ULL + 2;
+          window_ms = est > 1 ? est : 1;
+        }
+      }
+      if (this->frame_in_progress_ && (now - this->last_frame_time_ < window_ms)) {
+        this->overlaps_++;
+      }
+
+      this->frame_in_progress_ = true;
+      this->last_frame_time_ = now;
+      this->apply_pixels_(this->rx_buffer_.data(), count);
+      this->frame_count_++;
+      this->bytes_received_ += (uint32_t) (10 + this->rx_buffer_.size());
+      this->last_activity_ = now;
+
+      // Reset state for next frame
+      this->reset_receive_state_();
+      return true;
     }
-    got += (size_t) n;
   }
-  if (got < need) {
-    // Incomplete frame this iteration – treat as not ready yet.
-    return true;  // keep connection, but don't process
-  }
-  // Overlap detection: if a new frame arrives before previous presumed completion window elapsed
-  uint32_t now = App.get_loop_component_start_time();
-  // Determine dynamic completion window if estimate mode
-  uint32_t window_ms = this->frame_completion_interval_ms_;
-  if (this->completion_mode_ == "estimate") {
-    auto *addr = static_cast<light::AddressableLight *>(this->light_->get_output());
-    if (addr != nullptr) {
-      uint32_t est = (uint64_t) addr->size() * this->show_time_per_led_us_ / 1000ULL + 2;
-      window_ms = est > 1 ? est : 1;
-    }
-  }
-  if (this->frame_in_progress_ && (now - this->last_frame_time_ < window_ms)) {
-    this->overlaps_++;
-  }
-  this->frame_in_progress_ = true;
-  this->last_frame_time_ = now;
-  this->apply_pixels_(this->rx_buffer_.data(), count);
-  this->frame_count_++;
-  this->bytes_received_ += (uint32_t) (10 + this->rx_buffer_.size());
-  this->last_activity_ = now;
-  return true;
 }
 
 void TCPLedStreamComponent::loop() {
@@ -189,6 +237,7 @@ void TCPLedStreamComponent::loop() {
       this->client_ = std::move(sock);
       this->client_->setblocking(false);
       this->last_activity_ = App.get_loop_component_start_time();
+      this->reset_receive_state_();  // Reset buffering state for new connection
       ESP_LOGI(TAG, "Client connected %s", this->client_->getpeername().c_str());
       this->connects_++;
 #ifdef USE_BINARY_SENSOR
@@ -200,18 +249,30 @@ void TCPLedStreamComponent::loop() {
   }
   if (this->client_) {
     if (!this->read_frame_()) {
-      if (this->timeout_ms_ && (App.get_loop_component_start_time() - this->last_activity_ > this->timeout_ms_)) {
-        ESP_LOGI(TAG, "Connection timeout");
-        this->client_->close();
-        this->client_.reset();
-        this->disconnects_++;
-        this->frame_in_progress_ = false;
+      // Connection error or protocol violation - close connection
+      ESP_LOGI(TAG, "Closing connection due to error");
+      this->client_->close();
+      this->client_.reset();
+      this->disconnects_++;
+      this->frame_in_progress_ = false;
+      this->reset_receive_state_();
 #ifdef USE_BINARY_SENSOR
-        if (this->client_connected_binary_sensor_ != nullptr) {
-          this->client_connected_binary_sensor_->publish_state(false);
-        }
-#endif
+      if (this->client_connected_binary_sensor_ != nullptr) {
+        this->client_connected_binary_sensor_->publish_state(false);
       }
+#endif
+    } else if (this->timeout_ms_ && (App.get_loop_component_start_time() - this->last_activity_ > this->timeout_ms_)) {
+      ESP_LOGI(TAG, "Connection timeout");
+      this->client_->close();
+      this->client_.reset();
+      this->disconnects_++;
+      this->frame_in_progress_ = false;
+      this->reset_receive_state_();
+#ifdef USE_BINARY_SENSOR
+      if (this->client_connected_binary_sensor_ != nullptr) {
+        this->client_connected_binary_sensor_->publish_state(false);
+      }
+#endif
     }
   }
 
@@ -266,6 +327,13 @@ void TCPLedStreamComponent::dump_config() {
   ESP_LOGCONFIG(TAG, "  Completion mode: %s", this->completion_mode_.c_str());
   ESP_LOGCONFIG(TAG, "  Frame completion interval (ms): %u", this->frame_completion_interval_ms_);
   ESP_LOGCONFIG(TAG, "  Show time per LED (us): %u", this->show_time_per_led_us_);
+}
+
+void TCPLedStreamComponent::reset_receive_state_() {
+  this->receive_state_ = WAITING_HEADER;
+  this->header_bytes_received_ = 0;
+  this->payload_bytes_received_ = 0;
+  this->expected_payload_size_ = 0;
 }
 
 }  // namespace tcp_led_stream

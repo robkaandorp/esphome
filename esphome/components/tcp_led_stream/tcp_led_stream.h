@@ -61,6 +61,7 @@ class TCPLedStreamComponent : public Component {
   bool read_frame_();
   bool apply_pixels_(const uint8_t *data, uint32_t count);
   void publish_stats_();
+  void reset_receive_state_();
 
   light::AddressableLightState *light_{nullptr};
   uint16_t port_{7777};
@@ -72,6 +73,14 @@ class TCPLedStreamComponent : public Component {
   std::unique_ptr<socket::Socket> client_;
   uint32_t last_activity_{0};
   std::vector<uint8_t> rx_buffer_;
+
+  // TCP stream buffering state
+  enum ReceiveState { WAITING_HEADER, WAITING_PAYLOAD };
+  ReceiveState receive_state_{WAITING_HEADER};
+  uint8_t header_buffer_[10];
+  size_t header_bytes_received_{0};
+  uint32_t expected_payload_size_{0};
+  size_t payload_bytes_received_{0};
 
   // Stats
   uint32_t frame_count_{0};
