@@ -5,7 +5,9 @@
 #include "esphome/components/socket/socket.h"
 #include "esphome/components/light/addressable_light.h"
 #include "esphome/components/sensor/sensor.h"
+#ifdef USE_BINARY_SENSOR
 #include "esphome/components/binary_sensor/binary_sensor.h"
+#endif
 
 namespace esphome {
 namespace tcp_led_stream {
@@ -26,7 +28,17 @@ class TCPLedStreamComponent : public Component {
   void set_connects_sensor(sensor::Sensor *s) { this->connects_sensor_ = s; }
   void set_disconnects_sensor(sensor::Sensor *s) { this->disconnects_sensor_ = s; }
   void set_overlaps_sensor(sensor::Sensor *s) { this->overlaps_sensor_ = s; }
-  void set_client_connected_binary_sensor(binary_sensor::BinarySensor *b) { this->client_connected_binary_sensor_ = b; }
+  void set_client_connected_binary_sensor(
+#ifdef USE_BINARY_SENSOR
+      binary_sensor::BinarySensor *b
+#else
+      void *b
+#endif
+  ) {
+#ifdef USE_BINARY_SENSOR
+    this->client_connected_binary_sensor_ = b;
+#endif
+  }
   void set_completion_mode(const std::string &m) { this->completion_mode_ = m; }
   void set_show_time_per_led_us(uint32_t v) { this->show_time_per_led_us_ = v; }
 
@@ -69,7 +81,9 @@ class TCPLedStreamComponent : public Component {
   sensor::Sensor *connects_sensor_{nullptr};
   sensor::Sensor *disconnects_sensor_{nullptr};
   sensor::Sensor *overlaps_sensor_{nullptr};
+#ifdef USE_BINARY_SENSOR
   binary_sensor::BinarySensor *client_connected_binary_sensor_{nullptr};
+#endif
 };
 
 }  // namespace tcp_led_stream

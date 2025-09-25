@@ -57,9 +57,11 @@ void TCPLedStreamComponent::setup() {
   }
   ESP_LOGI(TAG, "Listening on port %u for LED frames", this->port_);
   this->last_stats_publish_ = App.get_loop_component_start_time();
+#ifdef USE_BINARY_SENSOR
   if (this->client_connected_binary_sensor_ != nullptr) {
     this->client_connected_binary_sensor_->publish_state(false);
   }
+#endif
 }
 
 bool TCPLedStreamComponent::apply_pixels_(const uint8_t *data, uint32_t count) {
@@ -189,9 +191,11 @@ void TCPLedStreamComponent::loop() {
       this->last_activity_ = App.get_loop_component_start_time();
       ESP_LOGI(TAG, "Client connected %s", this->client_->getpeername().c_str());
       this->connects_++;
+#ifdef USE_BINARY_SENSOR
       if (this->client_connected_binary_sensor_ != nullptr) {
         this->client_connected_binary_sensor_->publish_state(true);
       }
+#endif
     }
   }
   if (this->client_) {
@@ -202,9 +206,11 @@ void TCPLedStreamComponent::loop() {
         this->client_.reset();
         this->disconnects_++;
         this->frame_in_progress_ = false;
+#ifdef USE_BINARY_SENSOR
         if (this->client_connected_binary_sensor_ != nullptr) {
           this->client_connected_binary_sensor_->publish_state(false);
         }
+#endif
       }
     }
   }
